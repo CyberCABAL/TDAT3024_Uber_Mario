@@ -18,7 +18,7 @@ def reward_all(self):
 @property
 def death_cost(self):
 	if self._is_dying or self._is_dead:
-		return self.cost_of_death
+		return self._cost_of_death
 	return 0
 
 SuperMarioBrosEnv._x_factor = x_factor
