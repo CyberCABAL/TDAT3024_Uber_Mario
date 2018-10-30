@@ -15,50 +15,75 @@ from collections import deque
 
 env = gym.make("Taxi-v2").env
 
-α = 0.0001	# Learn rate
-ϵ = 1.0	# Randomness
-γ = 0.95	# Future importance
+α = 0.0000000000000000000000000001	# Learn rate
+ϵ = 1.0		# Randomness
+γ = 0.999	# Future importance
 
-ϵ_min = 0.001
-ϵ_decay = 0.9925
+ϵ_min = 0.05
+ϵ_decay = 0.99985
+
+"""def process(map_n):
+    res = []
+    i = 0
+    for c in map_n:
+        if (c != "\n" and i < 106):
+            res.append(ord(c))
+            i += 1
+    return res
+    #k.preprocessing.text.text_to_word_sequence(map_n, filters='', split='\n')"""
+
+
+size = 4
 
 model = k.Sequential()
-model.add(Dense(48, input_dim=env.observation_space.n, activation='relu'))
-model.add(Dense(48, activation='relu'))
-model.add(Dropout(0.075))
-model.add(Dense(env.action_space.n, activation='linear'))
-model.compile(loss='categorical_crossentropy', optimizer=Adam(lr=α))
+model.add(Dense(12, input_dim=size))
+#model.add(Dense(75))
+#model.add(Dropout(0.01))
+#model.add(Dense(8, input_dim=8))
+model.add(Dense(36, input_dim=12))
+model.add(Dense(18, input_dim=36))
+model.add(Dense(env.action_space.n, input_dim=18, activation='softmax'))
+model.compile(loss='mse', optimizer=Adam(lr=α, clipvalue=1))	#categorical_crossentropy
 
-memory = deque(maxlen=2000)
+memory = deque(maxlen=1000000)
 
-epoch_limit = 7000
+epoch_limit = 100000
+#late_limit = 8000
 
 overtimes = 0
-def big_array(data, size, value = 1):
+"""def big_array(data, size, value = 1):
     data_array = np.zeros((1, size))
     data_array[0][data] = value
-    return data_array
+    return data_array"""
 
-for i in range(0, 100):       # divided by 1000
+for i in range(0, 1000):
     state = env.reset()
     epochs, penalties, reward = 0, 0, 0
-
-    #frames = []
 
     done = False
     print("i: ", i)
 
     while not done and epochs <= epoch_limit:
-        action = (env.action_space.sample() if (random.uniform(0, 1) < ϵ) else np.argmax(model.predict(np.array(big_array(state, env.observation_space.n)))[0]))   # Explore or exploit
+        #map = np.array(process(env.render("ansi").getvalue()))
+        action = (env.action_space.sample() if (random.uniform(0, 1) < ϵ) else np.argmax(model.predict(np.array([list(env.decode(state))]))[0]))   # Explore or exploit
         n_state, reward, done, info = env.step(action)
+
+        #n_map = np.array(process(env.render("ansi").getvalue()))
 
         if reward == -10:
             penalties += 1
+            #reward += 9
 
-        if (epochs == epoch_limit):
-            overtimes += 1
-            reward -= 30
-        memory.append((np.array([state]), action, reward, np.array([n_state]), done))
+        #if reward == 20:
+        #    reward += 30
+
+        #if (epochs > late_limit):
+        #    reward -= 1
+        #if (epochs == epoch_limit):
+            #overtimes += 1
+            #reward -= 50
+            #print(reward, "for", action)
+        memory.append((state, action, reward, n_state, done))
         #print(action)
 
         state = n_state
@@ -68,24 +93,27 @@ for i in range(0, 100):       # divided by 1000
     for state, action, reward, n_state, done in r_batch:
         target = reward
         if not done:
-            target = reward + γ * np.amax(model.predict(big_array(n_state, env.observation_space.n)))
-        target_f = model.predict(big_array(state, env.observation_space.n))
+            target = reward + γ * np.amax(model.predict(np.array([list(env.decode(n_state))])))
+        target_f = model.predict(np.array([list(env.decode(state))]))
         target_f[0][action] = target
 
-        model.fit(big_array(state, env.observation_space.n), target_f, epochs=1, verbose=0)
+        model.fit(np.array([list(env.decode(state))]), target_f, epochs=3, verbose=0)
         if ϵ > ϵ_min:
             ϵ *= ϵ_decay
 
     print("Fails: ", penalties)
+    print("Epochs: ", epochs)
 
     if i % 1000 == 0:
         clear_output(wait=True)
         print(f"Episode: {i}")
 
-print("Overtimes: ", overtimes)
+#print("Overtimes: ", overtimes)
+
+print(model.get_weights())
 
 total_epochs, total_penalties = 0, 0
-episodes = 10
+episodes = 100
 
 for i in range(episodes):
     state = env.reset()
@@ -93,8 +121,8 @@ for i in range(episodes):
 
     done = False
 
-    while not done:
-        action = np.argmax(model.predict(big_array(state, env.observation_space.n))[0])
+    while not done and epochs < 10000:
+        action = np.argmax(model.predict(np.array([list(env.decode(state))]))[0])
         state, reward, done, info = env.step(action)
         print(action)
 
@@ -105,7 +133,7 @@ for i in range(episodes):
         if (i == episodes - 1):
             clear_output(wait=True)
             env.render()
-        if epochs % 10 == 0:
+        if (epochs % 100 == 0):
             clear_output(wait=True)
             print(f"Epoch: {epochs}")
 
@@ -115,3 +143,6 @@ for i in range(episodes):
 print(f"Results after {episodes}:")
 print(f"Timesteps per episode: {total_epochs / episodes}")
 print(f"Penalties per episode: {total_penalties / episodes}")
+env.close()
+
+model.save_weights("Weight");

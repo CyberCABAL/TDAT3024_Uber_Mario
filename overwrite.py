@@ -2,9 +2,9 @@ from gym_super_mario_bros import SuperMarioBrosEnv
 
 #Overwrite SuperMarioBrosEnv methods and variables.
 
-x_factor = 5;
-cost_of_death = -25;
-single_reward_range = (-25, 25)
+x_factor = 1;
+cost_of_death = -10;
+single_reward_range = (-10, 10)
 
 @property
 def x_reward(self):
