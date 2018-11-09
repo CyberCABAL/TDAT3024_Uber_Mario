@@ -56,11 +56,6 @@ def preprocess(image):
     return new_image
 
 model = k.Sequential()
-#model.add(k.layers.Dense(256, input_dim=dim_n))
-#model.add(k.layers.Dense(128, input_dim=256, activation='relu'))
-#model.add(k.layers.Dense(32, input_dim=128))
-#model.add(k.layers.Dense(action_amount, input_dim=32))
-#model.compile(loss='mse', optimizer=k.optimizers.Adam(lr=α, clipvalue=1))	#categorical_crossentropy
 
 model.add(k.layers.Conv2D(filters=32, kernel_size=[8, 8], strides=[4, 4], padding="VALID", activation='elu',
                           name="c0", input_shape=(y_state_r, x_state_r, stack_amount)))
@@ -130,6 +125,8 @@ for i in range(0, 300):
 
     r_batch = random.sample(memory, 128)
     for state, action, reward, n_state, done in r_batch:
+        cv2.imshow("Replay", state)
+        cv2.waitKey(1)
         target = reward
         q_target = model.predict(np.array([state]))
         if not done:
