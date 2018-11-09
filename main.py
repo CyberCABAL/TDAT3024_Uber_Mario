@@ -17,8 +17,8 @@ Moves = [
     ['A'],
     ['left'],
     ['left', 'A'],
-#    ['down'],
-#    ['up'],
+    ['down'],
+    ['up'],
 ]
 
 env = gym_super_mario_bros.make("SuperMarioBros-1-1-v1")	#Same as gym.make
@@ -28,16 +28,16 @@ action_amount = env.action_space.n
 
 α = 0.00025	# Learn rate
 ϵ = 1.0		# Randomness
-γ = 0.9	# Future importance
+γ = 0.85	# Future importance
 
-ϵ_min = 0.05
+ϵ_min = 0.075
 ϵ_decay = 0.99975
 
 # 16x16 = 1 cell
-sub_bottom = 30
-sub_top = 112  #80
-sub_right = 32
-sub_left = 8
+sub_bottom = 29
+sub_top = 80  #128
+sub_right = 0
+sub_left = 0
 
 x_state = 256
 y_state = 240
@@ -51,13 +51,13 @@ stack_amount = 4
 
 def preprocess(image):
     new_image = cv2.cvtColor(image[sub_top : y_state - sub_bottom, sub_left : x_state - sub_right], cv2.COLOR_RGB2GRAY)
-    cv2.imshow("vision", new_image)
-    cv2.waitKey(1)
+    #cv2.imshow("vision", new_image)
+    #cv2.waitKey(1)
     return new_image
 
 model = k.Sequential()
 
-model.add(k.layers.Conv2D(filters=32, kernel_size=[8, 8], strides=[4, 4], padding="VALID", activation='elu',
+model.add(k.layers.Conv2D(filters=32, kernel_size=[4, 4], strides=[4, 4], padding="VALID", activation='elu',
                           name="c0", input_shape=(y_state_r, x_state_r, stack_amount)))
 model.add(k.layers.BatchNormalization(epsilon=0.00000001))
 model.add(k.layers.Conv2D(filters=64, kernel_size=[4, 4], strides=[2, 2], padding="VALID", activation='elu',
@@ -73,13 +73,13 @@ model.add(k.layers.Dense(action_amount))
 
 model.compile(loss='mse', optimizer=k.optimizers.Adam(lr=α, clipvalue=1))
 
-memory = deque(maxlen=1000000)
+memory = deque(maxlen=100000)
 
 stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
 done = False
 #limit_low = 50
-limit_high = 600
-for i in range(0, 300):
+limit_high = 1250
+for i in range(0, 5000):
     state = preprocess(env.reset())
     for n in range(stack_amount):
         stack.append(state)
@@ -107,8 +107,8 @@ for i in range(0, 300):
         pos = info["x_pos"]
         if (pos > max_x):
             max_x = pos
-        if pos < 16:
-           reward = -10
+        #if pos < 10:
+        #   reward = -10
 
         memory.append((stacked_state, action, reward, stacked_state_n, done))
         state = proc_n_state
@@ -125,8 +125,8 @@ for i in range(0, 300):
 
     r_batch = random.sample(memory, 128)
     for state, action, reward, n_state, done in r_batch:
-        cv2.imshow("Replay", state)
-        cv2.waitKey(1)
+        #cv2.imshow("Replay", state)
+        #cv2.waitKey(1)
         target = reward
         q_target = model.predict(np.array([state]))
         if not done:
@@ -137,6 +137,8 @@ for i in range(0, 300):
         if ϵ > ϵ_min:
             ϵ *= ϵ_decay
 
+
+cv2.imwrite("Training.png", state)
 episodes = 5
 
 stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
@@ -162,6 +164,8 @@ for i in range(episodes):
         #    print(f"Epoch: {epochs}")
     print("i:", i)
     print("x-position:", info["x_pos"])
+
+cv2.imwrite("Result.png", state)
 
 env.close()
 cv2.destroyAllWindows()
