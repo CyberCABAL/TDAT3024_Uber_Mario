@@ -10,6 +10,8 @@ import cv2
 
 #https://github.com/simoninithomas/Deep_reinforcement_learning_Course/blob/master/Deep%20Q%20Learning/Doom/Deep%20Q%20learning%20with%20Doom.ipynb
 
+#https://www.researchgate.net/figure/DQN-DDQN-and-Duel-DDQN-performance-Results-were-normalized-by-subtracting-the-a-random_fig1_309738626
+
 Moves = [
     ['NOP'],
     ['right'],
@@ -17,8 +19,8 @@ Moves = [
     ['A'],
     ['left'],
     ['left', 'A'],
-    ['down'],
-    ['up'],
+#    ['down'],
+#    ['up'],
 ]
 
 env = gym_super_mario_bros.make("SuperMarioBros-1-1-v1")	#Same as gym.make
@@ -30,13 +32,13 @@ action_amount = env.action_space.n
 ϵ = 1.0		# Randomness
 γ = 0.85	# Future importance
 
-ϵ_min = 0.075
+ϵ_min = 0.125
 ϵ_decay = 0.99975
 
 # 16x16 = 1 cell
 sub_bottom = 29
 sub_top = 80  #128
-sub_right = 0
+sub_right = 32
 sub_left = 0
 
 x_state = 256
@@ -55,31 +57,43 @@ def preprocess(image):
     #cv2.waitKey(1)
     return new_image
 
-model = k.Sequential()
+def get_model():
+    model = k.Sequential()
 
-model.add(k.layers.Conv2D(filters=32, kernel_size=[4, 4], strides=[4, 4], padding="VALID", activation='elu',
-                          name="c0", input_shape=(y_state_r, x_state_r, stack_amount)))
-model.add(k.layers.BatchNormalization(epsilon=0.00000001))
-model.add(k.layers.Conv2D(filters=64, kernel_size=[4, 4], strides=[2, 2], padding="VALID", activation='elu',
-                          name="c1"))
-model.add(k.layers.Dropout(0.01))
-model.add(k.layers.BatchNormalization(epsilon=0.00000001))
-model.add(k.layers.Conv2D(filters=128, kernel_size=[2, 2], strides=[2, 2], padding="VALID", activation='elu',
-                          name="c2"))
-model.add(k.layers.BatchNormalization(epsilon=0.00000001))
-model.add(k.layers.Flatten())
-model.add(k.layers.Dense(512, activation='elu'))
-model.add(k.layers.Dense(action_amount))
+    model.add(k.layers.Conv2D(filters=32, kernel_size=[4, 4], strides=[4, 4], padding="VALID", activation='elu',
+                              name="c0", input_shape=(y_state_r, x_state_r, stack_amount)))
+    model.add(k.layers.BatchNormalization(epsilon=0.00000001))
+    model.add(k.layers.Conv2D(filters=64, kernel_size=[4, 4], strides=[2, 2], padding="VALID", activation='elu',
+                              name="c1"))
+    model.add(k.layers.BatchNormalization(epsilon=0.00000001))
+    # model.add(k.layers.Dense(64, activation='elu'))
+    # model.add(k.layers.Dropout(0.025))
+    model.add(k.layers.Conv2D(filters=128, kernel_size=[2, 2], strides=[2, 2], padding="VALID", activation='elu',
+                              name="c2"))
+    model.add(k.layers.BatchNormalization(epsilon=0.00000001))
+    model.add(k.layers.Flatten())
+    model.add(k.layers.Dense(512, activation='elu'))
+    model.add(k.layers.Dense(action_amount))
 
-model.compile(loss='mse', optimizer=k.optimizers.Adam(lr=α, clipvalue=1))
+    model.compile(loss='mse', optimizer=k.optimizers.Adam(lr=α, clipvalue=1))
+    return model
 
-memory = deque(maxlen=100000)
+Q = get_model()
+Q_target = get_model()
+
+def update_target():
+    Q_target.set_weights(Q.get_weights())
+
+
+update_freq = 10000
+upd = 0
+memory = deque(maxlen=200000)
 
 stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
 done = False
 #limit_low = 50
-limit_high = 1250
-for i in range(0, 5000):
+limit_high = 1000
+for i in range(0, 500):
     state = preprocess(env.reset())
     for n in range(stack_amount):
         stack.append(state)
@@ -90,7 +104,7 @@ for i in range(0, 5000):
         if (random.uniform(0, 1) < ϵ):
             action = env.action_space.sample()
         else:
-            arg = model.predict(np.array([stacked_state]))
+            arg = Q.predict(np.array([stacked_state]))
             action = np.argmax(arg)
             #print(action)
         #action = (env.action_space.sample() if (random.uniform(0, 1) < ϵ) else (np.argmax(model.predict(np.array([stacked_state])))))
@@ -107,17 +121,17 @@ for i in range(0, 5000):
         pos = info["x_pos"]
         if (pos > max_x):
             max_x = pos
-        #if pos < 10:
-        #   reward = -10
 
         memory.append((stacked_state, action, reward, stacked_state_n, done))
         state = proc_n_state
         stacked_state = stacked_state_n
-        #if done:
-        #    state = preprocess(env.reset())
+
         #if (i % 10 == 0):
         env.render()
         j += 1
+        if upd % update_freq == 0:
+            update_target()
+        upd += 1
 
     print("i:", i)
     #limit_high += 50
@@ -128,12 +142,12 @@ for i in range(0, 5000):
         #cv2.imshow("Replay", state)
         #cv2.waitKey(1)
         target = reward
-        q_target = model.predict(np.array([state]))
+        q_target_value = Q.predict(np.array([state]))
         if not done:
-            target = reward + γ * np.amax(model.predict(np.array([n_state])))
-        q_target[0][action] = target
+            target += γ * Q_target.predict(np.array([n_state]))[0][np.argmax(Q.predict(np.array([n_state])))]
+        q_target_value[0][action] = target
 
-        model.fit(np.array([state]), q_target, epochs=3, verbose=0)
+        Q.fit(np.array([state]), q_target_value, epochs=1, verbose=0)
         if ϵ > ϵ_min:
             ϵ *= ϵ_decay
 
@@ -153,7 +167,7 @@ for i in range(episodes):
     done = False
 
     while not done:
-        action = np.argmax(model.predict(np.array([stacked_state])))
+        action = np.argmax(Q.predict(np.array([stacked_state])))
         state, reward, done, info = env.step(action)
         stack.append(preprocess(state))
         stacked_state = np.stack(stack, axis=2)
