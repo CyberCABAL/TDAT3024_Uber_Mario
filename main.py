@@ -5,12 +5,15 @@ import random
 from collections import deque
 import keras as k
 import overwrite
+import tensorflow as tf
 
 import cv2
 
 #https://github.com/simoninithomas/Deep_reinforcement_learning_Course/blob/master/Deep%20Q%20Learning/Doom/Deep%20Q%20learning%20with%20Doom.ipynb
 
 #https://www.researchgate.net/figure/DQN-DDQN-and-Duel-DDQN-performance-Results-were-normalized-by-subtracting-the-a-random_fig1_309738626
+
+#https://github.com/jaromiru/AI-blog/blob/master/Seaquest-DDQN-PER.py
 
 Moves = [
     ['NOP'],
@@ -30,9 +33,9 @@ action_amount = env.action_space.n
 
 α = 0.00025	# Learn rate
 ϵ = 1.0		# Randomness
-γ = 0.85	# Future importance
+γ = 0.975	# Future importance
 
-ϵ_min = 0.125
+ϵ_min = 0.1
 ϵ_decay = 0.99975
 
 # 16x16 = 1 cell
@@ -48,7 +51,7 @@ y_state_r = y_state - sub_bottom - sub_top
 
 #dim = y_state_r * x_state_r
 
-stack_amount = 4
+stack_amount = 3
 #dim_n = dim * stack_amount
 
 def preprocess(image):
@@ -60,22 +63,23 @@ def preprocess(image):
 def get_model():
     model = k.Sequential()
 
-    model.add(k.layers.Conv2D(filters=32, kernel_size=[4, 4], strides=[4, 4], padding="VALID", activation='elu',
+    model.add(k.layers.Conv2D(filters=32, kernel_size=[4, 4], strides=[4, 4], padding="VALID", activation='relu',
                               name="c0", input_shape=(y_state_r, x_state_r, stack_amount)))
     model.add(k.layers.BatchNormalization(epsilon=0.00000001))
-    model.add(k.layers.Conv2D(filters=64, kernel_size=[4, 4], strides=[2, 2], padding="VALID", activation='elu',
+    model.add(k.layers.Conv2D(filters=64, kernel_size=[4, 4], strides=[2, 2], padding="VALID", activation='relu',
                               name="c1"))
     model.add(k.layers.BatchNormalization(epsilon=0.00000001))
     # model.add(k.layers.Dense(64, activation='elu'))
     # model.add(k.layers.Dropout(0.025))
-    model.add(k.layers.Conv2D(filters=128, kernel_size=[2, 2], strides=[2, 2], padding="VALID", activation='elu',
+    model.add(k.layers.Conv2D(filters=128, kernel_size=[2, 2], strides=[2, 2], padding="VALID", activation='relu',
                               name="c2"))
     model.add(k.layers.BatchNormalization(epsilon=0.00000001))
     model.add(k.layers.Flatten())
-    model.add(k.layers.Dense(512, activation='elu'))
+    model.add(k.layers.Dense(512, activation='relu'))
     model.add(k.layers.Dense(action_amount))
 
-    model.compile(loss='mse', optimizer=k.optimizers.Adam(lr=α, clipvalue=1))
+    #model.compile(loss="mse", optimizer=k.optimizers.Adam(lr=α, clipvalue=1))
+    model.compile(loss="logcosh", optimizer=k.optimizers.RMSprop(lr=α, clipvalue=1))
     return model
 
 Q = get_model()
@@ -87,17 +91,17 @@ def update_target():
 
 update_freq = 10000
 upd = 0
-memory = deque(maxlen=200000)
+memory = deque(maxlen=125000)
 
 stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
-done = False
 #limit_low = 50
-limit_high = 1000
-for i in range(0, 500):
+#limit_high = 1000
+for i in range(0, 250):
     state = preprocess(env.reset())
     for n in range(stack_amount):
         stack.append(state)
     stacked_state = np.stack(stack, axis=2)
+    done = False
     max_x = 0
     j = 0
     while not done:
@@ -112,8 +116,8 @@ for i in range(0, 500):
         n_state, reward, done, info = env.step(action)
         proc_n_state = preprocess(n_state)
 
-        if j >= limit_high:
-            done = True
+        #if j >= limit_high:
+        #    done = True
 
         stack.append(proc_n_state)
         stacked_state_n = np.stack(stack, axis=2)
@@ -174,8 +178,6 @@ for i in range(episodes):
 
         epochs += 1
         env.render()
-        #if (epochs % 100 == 0):
-        #    print(f"Epoch: {epochs}")
     print("i:", i)
     print("x-position:", info["x_pos"])
 
