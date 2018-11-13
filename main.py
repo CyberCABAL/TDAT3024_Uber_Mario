@@ -91,7 +91,7 @@ def update_target():
 
 update_freq = 10000
 upd = 0
-memory = deque(maxlen=125000)
+memory = deque(maxlen=75000)
 
 stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
 #limit_low = 50
@@ -138,7 +138,6 @@ for i in range(0, 250):
         upd += 1
 
     print("i:", i)
-    #limit_high += 50
     print("Best x position:", max_x)
 
     r_batch = random.sample(memory, 128)
