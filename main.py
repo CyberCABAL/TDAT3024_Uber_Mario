@@ -4,8 +4,7 @@ import numpy as np
 import random
 from collections import deque
 import keras as k
-import overwrite
-import tensorflow as tf
+#import overwrite
 
 import cv2
 
@@ -31,52 +30,57 @@ env = BinarySpaceToDiscreteSpaceEnv(env, Moves)
 
 action_amount = env.action_space.n
 
-α = 0.00025	# Learn rate
+α = 0.0015	# Learn rate
 ϵ = 1.0		# Randomness
 γ = 0.975	# Future importance
 
-ϵ_min = 0.1
+ϵ_min = 0.125
 ϵ_decay = 0.99975
 
 # 16x16 = 1 cell
-sub_bottom = 29
-sub_top = 80  #128
-sub_right = 32
+sub_bottom = 28
+sub_top = 64  #80
+sub_right = 16
 sub_left = 0
 
 x_state = 256
 y_state = 240
-x_state_r = x_state - sub_right - sub_left
-y_state_r = y_state - sub_bottom - sub_top
+
+calc1 = x_state - sub_right
+calc2 = y_state - sub_bottom
+
+x_state_r = calc1 - sub_left
+y_state_r = calc2 - sub_top
 
 #dim = y_state_r * x_state_r
 
-stack_amount = 3
+stack_amount = 4
 #dim_n = dim * stack_amount
 
 def preprocess(image):
-    new_image = cv2.cvtColor(image[sub_top : y_state - sub_bottom, sub_left : x_state - sub_right], cv2.COLOR_RGB2GRAY)
+    #new_image = cv2.cvtColor(image[sub_top : calc2, sub_left : calc1], cv2.COLOR_RGB2GRAY)
     #cv2.imshow("vision", new_image)
     #cv2.waitKey(1)
-    return new_image
+    #return new_image
+    return np.array(cv2.cvtColor(image[sub_top : calc2, sub_left : calc1], cv2.COLOR_RGB2GRAY), dtype="uint8") # / 255
 
 def get_model():
     model = k.Sequential()
 
-    model.add(k.layers.Conv2D(filters=32, kernel_size=[4, 4], strides=[4, 4], padding="VALID", activation='relu',
+    model.add(k.layers.Conv2D(filters=32, kernel_size=[4, 4], kernel_initializer='glorot_uniform', strides=[4, 4], padding="VALID", activation='relu',
                               name="c0", input_shape=(y_state_r, x_state_r, stack_amount)))
-    model.add(k.layers.BatchNormalization(epsilon=0.00000001))
-    model.add(k.layers.Conv2D(filters=64, kernel_size=[4, 4], strides=[2, 2], padding="VALID", activation='relu',
+    model.add(k.layers.BatchNormalization(epsilon=0.000001, axis=1))
+    model.add(k.layers.Conv2D(filters=64, kernel_size=[4, 4], kernel_initializer='glorot_uniform', strides=[2, 2], padding="VALID", activation='relu',
                               name="c1"))
-    model.add(k.layers.BatchNormalization(epsilon=0.00000001))
-    # model.add(k.layers.Dense(64, activation='elu'))
+    model.add(k.layers.BatchNormalization(epsilon=0.000001, axis=1))
+    # model.add(k.layers.Dense(64, activation='relu', kernel_initializer='glorot_uniform'))
     # model.add(k.layers.Dropout(0.025))
-    model.add(k.layers.Conv2D(filters=128, kernel_size=[2, 2], strides=[2, 2], padding="VALID", activation='relu',
+    model.add(k.layers.Conv2D(filters=128, kernel_size=[2, 2], kernel_initializer='glorot_uniform', strides=[2, 2], padding="VALID", activation='relu',
                               name="c2"))
-    model.add(k.layers.BatchNormalization(epsilon=0.00000001))
+    model.add(k.layers.BatchNormalization(epsilon=0.000001, axis=1))
     model.add(k.layers.Flatten())
-    model.add(k.layers.Dense(512, activation='relu'))
-    model.add(k.layers.Dense(action_amount))
+    model.add(k.layers.Dense(512, activation='relu', kernel_initializer='glorot_uniform'))
+    model.add(k.layers.Dense(action_amount, kernel_initializer='glorot_uniform'))
 
     #model.compile(loss="mse", optimizer=k.optimizers.Adam(lr=α, clipvalue=1))
     model.compile(loss="logcosh", optimizer=k.optimizers.RMSprop(lr=α, clipvalue=1))
@@ -89,14 +93,14 @@ def update_target():
     Q_target.set_weights(Q.get_weights())
 
 
-update_freq = 10000
+update_freq = 75000
 upd = 0
-memory = deque(maxlen=75000)
+memory = deque(maxlen=50000)
 
 stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
 #limit_low = 50
 #limit_high = 1000
-for i in range(0, 250):
+for i in range(0, 5000):
     state = preprocess(env.reset())
     for n in range(stack_amount):
         stack.append(state)
@@ -105,13 +109,7 @@ for i in range(0, 250):
     max_x = 0
     j = 0
     while not done:
-        if (random.uniform(0, 1) < ϵ):
-            action = env.action_space.sample()
-        else:
-            arg = Q.predict(np.array([stacked_state]))
-            action = np.argmax(arg)
-            #print(action)
-        #action = (env.action_space.sample() if (random.uniform(0, 1) < ϵ) else (np.argmax(model.predict(np.array([stacked_state])))))
+        action = (env.action_space.sample() if (random.uniform(0, 1) < ϵ) else np.argmax(Q.predict(np.array([stacked_state]))))
 
         n_state, reward, done, info = env.step(action)
         proc_n_state = preprocess(n_state)
@@ -132,13 +130,14 @@ for i in range(0, 250):
 
         #if (i % 10 == 0):
         env.render()
-        j += 1
+        #j += 1
         if upd % update_freq == 0:
             update_target()
         upd += 1
 
     print("i:", i)
     print("Best x position:", max_x)
+    #print("Queue size:", len(memory))
 
     r_batch = random.sample(memory, 128)
     for state, action, reward, n_state, done in r_batch:
@@ -156,13 +155,13 @@ for i in range(0, 250):
 
 
 cv2.imwrite("Training.png", state)
-episodes = 5
+episodes = 10
 
 stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
 
 for i in range(episodes):
     state = env.reset()
-    epochs = 0
+    #epochs = 0
     for n in range(stack_amount):
         stack.append(preprocess(state))
     stacked_state = np.stack(stack, axis=2)
@@ -175,7 +174,7 @@ for i in range(episodes):
         stack.append(preprocess(state))
         stacked_state = np.stack(stack, axis=2)
 
-        epochs += 1
+        #epochs += 1
         env.render()
     print("i:", i)
     print("x-position:", info["x_pos"])
