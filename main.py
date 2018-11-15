@@ -4,6 +4,9 @@ import numpy as np
 import random
 from collections import deque
 import keras as k
+from sys import argv
+#from sys import getsizeof
+import threading
 #import overwrite
 
 import cv2
@@ -35,13 +38,13 @@ action_amount = env.action_space.n
 γ = 0.975	# Future importance
 
 ϵ_min = 0.125
-ϵ_decay = 0.99975
+ϵ_decay = 0.9975
 
 # 16x16 = 1 cell
 sub_bottom = 28
 sub_top = 64  #80
 sub_right = 16
-sub_left = 0
+sub_left = 8
 
 x_state = 256
 y_state = 240
@@ -54,19 +57,29 @@ resize_factor = 0.25    # 1/n² the amount of RAM used, little information lost
 x_state_r = int((calc1 - sub_left) * resize_factor)
 y_state_r = int((calc2 - sub_top) * resize_factor)
 
-stack_amount = 4
+stack_amount = 3
 visual = False
+colour = False
+
+upd = 0
+
+#continue_learning = True
+
+net_input_shape = (y_state_r, x_state_r, stack_amount)
+stack_axis = 2
 
 
 def preprocess(image):
-    new_image = np.array(cv2.cvtColor(cv2.resize(
-        image[sub_top: calc2, sub_left: calc1], None, fx=resize_factor, fy=resize_factor), cv2.COLOR_RGB2GRAY), dtype="uint8")
-    #new_image = cv2.cvtColor(image[sub_top : calc2, sub_left : calc1], cv2.COLOR_RGB2GRAY)
+    if colour:
+        new_image = np.array(cv2.resize(
+            image[sub_top: calc2, sub_left: calc1], None, fx=resize_factor, fy=resize_factor), dtype="uint8")
+    else:
+        new_image = np.array(cv2.cvtColor(cv2.resize(
+            image[sub_top: calc2, sub_left: calc1], None, fx=resize_factor, fy=resize_factor), cv2.COLOR_RGB2GRAY), dtype="uint8")
     if visual:
-        cv2.imshow("vision", new_image)
+        cv2.imshow("Vision", new_image)
         cv2.waitKey(1)
-    #return new_image
-    #return np.array(cv2.cvtColor(image[sub_top : calc2, sub_left : calc1], cv2.COLOR_RGB2GRAY), dtype="uint8") # / 255
+
     return new_image
 
 
@@ -74,7 +87,7 @@ def get_model():
     model = k.Sequential()
 
     model.add(k.layers.Conv2D(filters=32, kernel_size=[4, 4], kernel_initializer='glorot_uniform', strides=[4, 4], padding="VALID", activation='relu',
-                              name="c0", input_shape=(y_state_r, x_state_r, stack_amount)))
+                              name="c0", input_shape=net_input_shape))
     model.add(k.layers.BatchNormalization(epsilon=0.000001, axis=1))
     model.add(k.layers.Conv2D(filters=64, kernel_size=[4, 4], kernel_initializer='glorot_uniform', strides=[2, 2], padding="VALID", activation='relu',
                               name="c1"))
@@ -95,6 +108,7 @@ def get_model():
 
 def update_target(network, target):
     target.set_weights(network.get_weights())
+    print("Target updated")
 
 
 def step(stacked_state, network):
@@ -103,10 +117,15 @@ def step(stacked_state, network):
 
 
 def replay(batches, network, target_network):
+    #while batches >= memory_size:
+    #    batches = int(batches / 2)
     r_batch = random.sample(memory, batches)
     for state, action, reward, n_state, done in r_batch:
         if visual:
-            cv2.imshow("Replay", state)
+            if colour:
+                cv2.imshow("Replay", state[:, :, :3])
+            else:
+                cv2.imshow("Replay", state)
             cv2.waitKey(1)
         target = reward
         q_target_value = network.predict(np.array([state]))
@@ -117,12 +136,19 @@ def replay(batches, network, target_network):
         network.fit(np.array([state]), q_target_value, epochs=1, verbose=0)
 
 
-def simulation(stack, network):
+def stack_the_state(stack_0):
+    res_state = np.stack(stack_0, axis=stack_axis)
+    return res_state if not colour else np.reshape(res_state, (y_state_r, x_state_r, stack_amount * 3))
+
+
+def simulation(network):
+    stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
+
     global memory, upd
     state = preprocess(env.reset())
     for n in range(stack_amount):
         stack.append(state)
-    stack_state = np.stack(stack, axis=2)
+    stack_state = stack_the_state(stack)
     done = False
     max_x = 0
     while not done:
@@ -131,7 +157,7 @@ def simulation(stack, network):
         proc_n_state = preprocess(n_state)
 
         stack.append(proc_n_state)
-        stack_state_n = np.stack(stack, axis=2)
+        stack_state_n = stack_the_state(stack)
 
         pos = info["x_pos"]
 
@@ -143,28 +169,38 @@ def simulation(stack, network):
             max_x = pos
 
         env.render()
+        upd += 1
 
     return max_x
 
 
-def multiple_sim(amount, network, target):
-    stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
-    for i in range(0, amount):
-        max_x = simulation(stack, network)
-
-        global upd
-        if upd > update_freq:
-            update_target(network, target)
+def learn(n, t):
+    global upd
+    if upd > update_freq:
+        update_target(n, t)
         upd = 0
 
-        replay(128, network, target)
+    if len(memory) > 256:
+        replay(256, n, t)
+
+
+
+def multiple_sim(amount, network, target):
+    for i in range(0, amount):
+        #th = threading.Thread(target=learn, args=(network, target))
+        #th.start()
+        max_x = simulation(network)
+
+        learn(network, target)
+
         global ϵ
         if ϵ > ϵ_min:
             ϵ *= ϵ_decay
 
         print("i:", i)
         print("Best x position:", max_x)
-        # print("Queue size:", len(memory))
+        #th.join()
+        # print("Queue size:", getsizeof(memory), "Elements:", len(memory))
 
 
 def tests(episodes=5):
@@ -174,7 +210,7 @@ def tests(episodes=5):
         state = env.reset()
         for n in range(stack_amount):
             stack.append(preprocess(state))
-        stacked_state = np.stack(stack, axis=2)
+        stacked_state = stack_the_state(stack)
 
         done = False
 
@@ -182,7 +218,7 @@ def tests(episodes=5):
             action = np.argmax(Q.predict(np.array([stacked_state])))
             state, reward, done, info = env.step(action)
             stack.append(preprocess(state))
-            stacked_state = np.stack(stack, axis=2)
+            stacked_state = stack_the_state(stack)
             env.render()
 
         print("i:", i)
@@ -192,14 +228,20 @@ def tests(episodes=5):
 
 
 if __name__ == "__main__":
+    if "-v" in argv:
+        visual = True
+    if "-c" in argv:
+        colour = True
+        net_input_shape = (y_state_r, x_state_r, stack_amount * 3)
+        stack_axis = 3
+
     Q = get_model()
     Q_target = get_model()
 
-    update_freq = 75000
-    memory = deque(maxlen=200000)
-    upd = 0
+    update_freq = 25000
+    memory = deque(maxlen=125000)
 
-    multiple_sim(500, Q, Q_target)
+    multiple_sim(1000, Q, Q_target)
 
     last_state = tests(10)
 
@@ -207,3 +249,6 @@ if __name__ == "__main__":
 
     env.close()
     cv2.destroyAllWindows()
+
+    Q.save_weights("weights")
+    Q_target.save_weights("t_weights")
