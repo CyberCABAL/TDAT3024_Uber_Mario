@@ -30,7 +30,7 @@ env = BinarySpaceToDiscreteSpaceEnv(env, Moves)
 
 action_amount = env.action_space.n
 
-α = 0.0015	# Learn rate
+α = 0.00025	# Learn rate
 ϵ = 1.0		# Randomness
 γ = 0.975	# Future importance
 
@@ -49,20 +49,26 @@ y_state = 240
 calc1 = x_state - sub_right
 calc2 = y_state - sub_bottom
 
-x_state_r = calc1 - sub_left
-y_state_r = calc2 - sub_top
+resize_factor = 0.25    # 1/n² the amount of RAM used, little information lost
 
-#dim = y_state_r * x_state_r
+x_state_r = int((calc1 - sub_left) * resize_factor)
+y_state_r = int((calc2 - sub_top) * resize_factor)
 
 stack_amount = 4
-#dim_n = dim * stack_amount
+visual = False
+
 
 def preprocess(image):
+    new_image = np.array(cv2.cvtColor(cv2.resize(
+        image[sub_top: calc2, sub_left: calc1], None, fx=resize_factor, fy=resize_factor), cv2.COLOR_RGB2GRAY), dtype="uint8")
     #new_image = cv2.cvtColor(image[sub_top : calc2, sub_left : calc1], cv2.COLOR_RGB2GRAY)
-    #cv2.imshow("vision", new_image)
-    #cv2.waitKey(1)
+    if visual:
+        cv2.imshow("vision", new_image)
+        cv2.waitKey(1)
     #return new_image
-    return np.array(cv2.cvtColor(image[sub_top : calc2, sub_left : calc1], cv2.COLOR_RGB2GRAY), dtype="uint8") # / 255
+    #return np.array(cv2.cvtColor(image[sub_top : calc2, sub_left : calc1], cv2.COLOR_RGB2GRAY), dtype="uint8") # / 255
+    return new_image
+
 
 def get_model():
     model = k.Sequential()
@@ -86,100 +92,118 @@ def get_model():
     model.compile(loss="logcosh", optimizer=k.optimizers.RMSprop(lr=α, clipvalue=1))
     return model
 
-Q = get_model()
-Q_target = get_model()
 
-def update_target():
-    Q_target.set_weights(Q.get_weights())
+def update_target(network, target):
+    target.set_weights(network.get_weights())
 
 
-update_freq = 75000
-upd = 0
-memory = deque(maxlen=50000)
+def step(stacked_state, network):
+    action = env.action_space.sample() if (random.uniform(0, 1) < ϵ) else np.argmax(network.predict(np.array([stacked_state])))
+    return action, env.step(action)
 
-stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
-#limit_low = 50
-#limit_high = 1000
-for i in range(0, 5000):
+
+def replay(batches, network, target_network):
+    r_batch = random.sample(memory, batches)
+    for state, action, reward, n_state, done in r_batch:
+        if visual:
+            cv2.imshow("Replay", state)
+            cv2.waitKey(1)
+        target = reward
+        q_target_value = network.predict(np.array([state]))
+        if not done:
+            target += γ * target_network.predict(np.array([n_state]))[0][np.argmax(network.predict(np.array([n_state])))]
+        q_target_value[0][action] = target
+
+        network.fit(np.array([state]), q_target_value, epochs=1, verbose=0)
+
+
+def simulation(stack, network):
+    global memory, upd
     state = preprocess(env.reset())
     for n in range(stack_amount):
         stack.append(state)
-    stacked_state = np.stack(stack, axis=2)
+    stack_state = np.stack(stack, axis=2)
     done = False
     max_x = 0
-    j = 0
     while not done:
-        action = (env.action_space.sample() if (random.uniform(0, 1) < ϵ) else np.argmax(Q.predict(np.array([stacked_state]))))
-
-        n_state, reward, done, info = env.step(action)
+        action, data = step(stack_state, network)
+        n_state, reward, done, info = data
         proc_n_state = preprocess(n_state)
 
-        #if j >= limit_high:
-        #    done = True
-
         stack.append(proc_n_state)
-        stacked_state_n = np.stack(stack, axis=2)
+        stack_state_n = np.stack(stack, axis=2)
 
         pos = info["x_pos"]
-        if (pos > max_x):
+
+        memory.append((stack_state, action, reward, stack_state_n, done))
+        #state = proc_n_state
+        stack_state = stack_state_n
+
+        if pos > max_x:
             max_x = pos
 
-        memory.append((stacked_state, action, reward, stacked_state_n, done))
-        state = proc_n_state
-        stacked_state = stacked_state_n
-
-        #if (i % 10 == 0):
         env.render()
-        #j += 1
-        if upd % update_freq == 0:
-            update_target()
-        upd += 1
 
-    print("i:", i)
-    print("Best x position:", max_x)
-    #print("Queue size:", len(memory))
+    return max_x
 
-    r_batch = random.sample(memory, 128)
-    for state, action, reward, n_state, done in r_batch:
-        #cv2.imshow("Replay", state)
-        #cv2.waitKey(1)
-        target = reward
-        q_target_value = Q.predict(np.array([state]))
-        if not done:
-            target += γ * Q_target.predict(np.array([n_state]))[0][np.argmax(Q.predict(np.array([n_state])))]
-        q_target_value[0][action] = target
 
-        Q.fit(np.array([state]), q_target_value, epochs=1, verbose=0)
+def multiple_sim(amount, network, target):
+    stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
+    for i in range(0, amount):
+        max_x = simulation(stack, network)
+
+        global upd
+        if upd > update_freq:
+            update_target(network, target)
+        upd = 0
+
+        replay(128, network, target)
+        global ϵ
         if ϵ > ϵ_min:
             ϵ *= ϵ_decay
 
+        print("i:", i)
+        print("Best x position:", max_x)
+        # print("Queue size:", len(memory))
 
-cv2.imwrite("Training.png", state)
-episodes = 10
 
-stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
+def tests(episodes=5):
+    stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
 
-for i in range(episodes):
-    state = env.reset()
-    #epochs = 0
-    for n in range(stack_amount):
-        stack.append(preprocess(state))
-    stacked_state = np.stack(stack, axis=2)
-
-    done = False
-
-    while not done:
-        action = np.argmax(Q.predict(np.array([stacked_state])))
-        state, reward, done, info = env.step(action)
-        stack.append(preprocess(state))
+    for i in range(episodes):
+        state = env.reset()
+        for n in range(stack_amount):
+            stack.append(preprocess(state))
         stacked_state = np.stack(stack, axis=2)
 
-        #epochs += 1
-        env.render()
-    print("i:", i)
-    print("x-position:", info["x_pos"])
+        done = False
 
-cv2.imwrite("Result.png", state)
+        while not done:
+            action = np.argmax(Q.predict(np.array([stacked_state])))
+            state, reward, done, info = env.step(action)
+            stack.append(preprocess(state))
+            stacked_state = np.stack(stack, axis=2)
+            env.render()
 
-env.close()
-cv2.destroyAllWindows()
+        print("i:", i)
+        print("x-position:", info["x_pos"])
+
+    return state
+
+
+if __name__ == "__main__":
+    Q = get_model()
+    Q_target = get_model()
+
+    update_freq = 75000
+    memory = deque(maxlen=200000)
+    upd = 0
+
+    multiple_sim(500, Q, Q_target)
+
+    last_state = tests(10)
+
+    cv2.imwrite("Result.png", last_state)
+
+    env.close()
+    cv2.destroyAllWindows()
