@@ -5,8 +5,17 @@ import random
 from collections import deque
 import keras as k
 from sys import argv
-#from sys import getsizeof
-import threading
+from sys import getsizeof
+import resource
+
+from stack_queue import StackQueue
+import compression
+
+
+def memory_use():
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+#import threading
 #import overwrite
 
 import cv2
@@ -31,6 +40,12 @@ Moves = [
 env = gym_super_mario_bros.make("SuperMarioBros-1-1-v1")	#Same as gym.make
 env = BinarySpaceToDiscreteSpaceEnv(env, Moves)
 
+"""def rec_get_size(obj):
+    size = getsizeof(obj)
+    if hasattr(obj, "__iter__"):
+        size += sum([rec_get_size(o) for o in obj])
+    return size"""
+
 action_amount = env.action_space.n
 
 α = 0.00025	# Learn rate
@@ -38,7 +53,7 @@ action_amount = env.action_space.n
 γ = 0.975	# Future importance
 
 ϵ_min = 0.125
-ϵ_decay = 0.9975
+ϵ_decay = 0.9995
 
 # 16x16 = 1 cell
 sub_bottom = 28
@@ -57,7 +72,10 @@ resize_factor = 0.25    # 1/n² the amount of RAM used, little information lost
 x_state_r = int((calc1 - sub_left) * resize_factor)
 y_state_r = int((calc2 - sub_top) * resize_factor)
 
+memory_size = 150000
 stack_amount = 3
+stack_axis = 2
+
 visual = False
 colour = False
 
@@ -66,7 +84,6 @@ upd = 0
 #continue_learning = True
 
 net_input_shape = (y_state_r, x_state_r, stack_amount)
-stack_axis = 2
 
 
 def preprocess(image):
@@ -111,15 +128,18 @@ def update_target(network, target):
     print("Target updated")
 
 
-def step(stacked_state, network):
+def step(stacked_state, network, ϵ):
+    """if (random.uniform(0, 1) < ϵ):
+        action = env.action_space.sample()
+    else:
+        action = np.argmax(network.predict(np.array([stacked_state])))
+        print("Action:", action)"""
     action = env.action_space.sample() if (random.uniform(0, 1) < ϵ) else np.argmax(network.predict(np.array([stacked_state])))
     return action, env.step(action)
 
 
 def replay(batches, network, target_network):
-    #while batches >= memory_size:
-    #    batches = int(batches / 2)
-    r_batch = random.sample(memory, batches)
+    r_batch = memory.random_stacks(stack_axis, batches)
     for state, action, reward, n_state, done in r_batch:
         if visual:
             if colour:
@@ -148,23 +168,21 @@ def simulation(network):
     state = preprocess(env.reset())
     for n in range(stack_amount):
         stack.append(state)
-    stack_state = stack_the_state(stack)
     done = False
     max_x = 0
     while not done:
-        action, data = step(stack_state, network)
+        stack_state = stack_the_state(stack)
+        action, data = step(stack_state, network, ϵ)
         n_state, reward, done, info = data
         proc_n_state = preprocess(n_state)
 
         stack.append(proc_n_state)
-        stack_state_n = stack_the_state(stack)
+
+        memory.append((compression.run_length_c(state, colour), action, reward,
+                       compression.run_length_c(proc_n_state, colour), done))
+        state = proc_n_state
 
         pos = info["x_pos"]
-
-        memory.append((stack_state, action, reward, stack_state_n, done))
-        #state = proc_n_state
-        stack_state = stack_state_n
-
         if pos > max_x:
             max_x = pos
 
@@ -184,8 +202,8 @@ def learn(n, t):
         replay(256, n, t)
 
 
-
 def multiple_sim(amount, network, target):
+    global ϵ
     for i in range(0, amount):
         #th = threading.Thread(target=learn, args=(network, target))
         #th.start()
@@ -193,36 +211,34 @@ def multiple_sim(amount, network, target):
 
         learn(network, target)
 
-        global ϵ
         if ϵ > ϵ_min:
             ϵ *= ϵ_decay
 
-        print("i:", i)
-        print("Best x position:", max_x)
+        if i % 1000 == 0:
+            network.save_weights("weights")
+            target.save_weights("t_weights")
+
+        print(i, "Best x position:", max_x, "Memory use:", memory_use(), "Queue:", len(memory), "ϵ =", "{0:.3f}".format(ϵ))
         #th.join()
-        # print("Queue size:", getsizeof(memory), "Elements:", len(memory))
 
 
-def tests(episodes=5):
+def tests(network, episodes=5):
     stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
 
     for i in range(episodes):
         state = env.reset()
         for n in range(stack_amount):
             stack.append(preprocess(state))
-        stacked_state = stack_the_state(stack)
 
         done = False
-
         while not done:
-            action = np.argmax(Q.predict(np.array([stacked_state])))
+            stacked_state = stack_the_state(stack)
+            action, data = step(stacked_state, network, 0)
             state, reward, done, info = env.step(action)
             stack.append(preprocess(state))
-            stacked_state = stack_the_state(stack)
             env.render()
 
-        print("i:", i)
-        print("x-position:", info["x_pos"])
+        print(i, "x-position:", info["x_pos"])
 
     return state
 
@@ -238,17 +254,20 @@ if __name__ == "__main__":
     Q = get_model()
     Q_target = get_model()
 
-    update_freq = 25000
-    memory = deque(maxlen=125000)
+    update_freq = 50000
+    memory = StackQueue(memory_size, stack_amount, (y_state_r, x_state_r), colour)
 
-    multiple_sim(1000, Q, Q_target)
+    """colour = True
+    test = env.reset()
+    c = compression.run_length_c(test, colour)
+    d = compression.run_length_d(c)
+    print((test == d).all())"""
 
-    last_state = tests(10)
+    multiple_sim(50, Q, Q_target)
+
+    last_state = tests(Q, 10)
 
     cv2.imwrite("Result.png", last_state)
 
     env.close()
     cv2.destroyAllWindows()
-
-    Q.save_weights("weights")
-    Q_target.save_weights("t_weights")
