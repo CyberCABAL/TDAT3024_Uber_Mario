@@ -5,11 +5,13 @@ import random
 from collections import deque
 import keras as k
 from sys import argv
-from sys import getsizeof
 import resource
+import cv2
 
 from stack_queue import StackQueue
 import compression
+
+from multiprocessing.pool import ThreadPool
 
 
 def memory_use():
@@ -17,8 +19,6 @@ def memory_use():
 
 #import threading
 #import overwrite
-
-import cv2
 
 #https://github.com/simoninithomas/Deep_reinforcement_learning_Course/blob/master/Deep%20Q%20Learning/Doom/Deep%20Q%20learning%20with%20Doom.ipynb
 
@@ -37,29 +37,33 @@ Moves = [
 #    ['up'],
 ]
 
-env = gym_super_mario_bros.make("SuperMarioBros-1-1-v1")	#Same as gym.make
-env = BinarySpaceToDiscreteSpaceEnv(env, Moves)
 
-"""def rec_get_size(obj):
-    size = getsizeof(obj)
-    if hasattr(obj, "__iter__"):
-        size += sum([rec_get_size(o) for o in obj])
-    return size"""
+def make_env(world, level, v = "v1"):
+    env_0 = gym_super_mario_bros.make("SuperMarioBros-" + str(world) + "-" + str(level) + "-" + v)	#Same as gym.make
+    return BinarySpaceToDiscreteSpaceEnv(env_0, Moves)
 
+
+def make_random_env(v = "v1"):
+    return make_env(1, random.randint(1, 3))
+
+
+env = make_random_env()
 action_amount = env.action_space.n
+
+pool = ThreadPool(processes=3)
 
 α = 0.00025	# Learn rate
 ϵ = 1.0		# Randomness
-γ = 0.975	# Future importance
+γ = 0.9875	# Future importance
 
-ϵ_min = 0.125
-ϵ_decay = 0.9995
+ϵ_min = 0.175
+ϵ_decay = 0.9999975
 
 # 16x16 = 1 cell
-sub_bottom = 28
-sub_top = 64  #80
-sub_right = 16
-sub_left = 8
+sub_bottom = 12
+sub_top = 52  #80
+sub_right = 22
+sub_left = 14
 
 x_state = 256
 y_state = 240
@@ -67,12 +71,13 @@ y_state = 240
 calc1 = x_state - sub_right
 calc2 = y_state - sub_bottom
 
-resize_factor = 0.25    # 1/n² the amount of RAM used, little information lost
+resize_factor = 0.25    # 1/n² the amount of RAM used
 
 x_state_r = int((calc1 - sub_left) * resize_factor)
 y_state_r = int((calc2 - sub_top) * resize_factor)
 
-memory_size = 150000
+memory_size = 500000
+batch_size = 128
 stack_amount = 3
 stack_axis = 2
 
@@ -80,6 +85,8 @@ visual = False
 colour = False
 
 upd = 0
+seen = 0
+render_limit = -1
 
 #continue_learning = True
 
@@ -103,14 +110,12 @@ def preprocess(image):
 def get_model():
     model = k.Sequential()
 
-    model.add(k.layers.Conv2D(filters=32, kernel_size=[4, 4], kernel_initializer='glorot_uniform', strides=[4, 4], padding="VALID", activation='relu',
+    model.add(k.layers.Conv2D(filters=32, kernel_size=[8, 8], kernel_initializer='glorot_uniform', strides=[4, 4], padding="VALID", activation='relu',
                               name="c0", input_shape=net_input_shape))
     model.add(k.layers.BatchNormalization(epsilon=0.000001, axis=1))
     model.add(k.layers.Conv2D(filters=64, kernel_size=[4, 4], kernel_initializer='glorot_uniform', strides=[2, 2], padding="VALID", activation='relu',
                               name="c1"))
     model.add(k.layers.BatchNormalization(epsilon=0.000001, axis=1))
-    # model.add(k.layers.Dense(64, activation='relu', kernel_initializer='glorot_uniform'))
-    # model.add(k.layers.Dropout(0.025))
     model.add(k.layers.Conv2D(filters=128, kernel_size=[2, 2], kernel_initializer='glorot_uniform', strides=[2, 2], padding="VALID", activation='relu',
                               name="c2"))
     model.add(k.layers.BatchNormalization(epsilon=0.000001, axis=1))
@@ -124,18 +129,18 @@ def get_model():
 
 
 def update_target(network, target):
+    print("Target updated, update counter reset to", upd)
     target.set_weights(network.get_weights())
-    print("Target updated")
 
 
-def step(stacked_state, network, ϵ):
+def step(env_0, stacked_state, network, ϵ):
     """if (random.uniform(0, 1) < ϵ):
         action = env.action_space.sample()
     else:
         action = np.argmax(network.predict(np.array([stacked_state])))
         print("Action:", action)"""
-    action = env.action_space.sample() if (random.uniform(0, 1) < ϵ) else np.argmax(network.predict(np.array([stacked_state])))
-    return action, env.step(action)
+    action = env_0.action_space.sample() if (random.uniform(0, 1) < ϵ) else np.argmax(network.predict(np.array([stacked_state])))
+    return action, env_0.step(action)
 
 
 def replay(batches, network, target_network):
@@ -161,53 +166,65 @@ def stack_the_state(stack_0):
     return res_state if not colour else np.reshape(res_state, (y_state_r, x_state_r, stack_amount * 3))
 
 
-def simulation(network):
+def save(data, memory_0):
+    memory_0.append((compression.run_length_c(data[0], colour), data[1], data[2],
+                     compression.run_length_c(data[3], colour), data[4]))
+
+
+def simulation(env_0, network, render):
     stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
 
-    global memory, upd
-    state = preprocess(env.reset())
+    global upd, memory
+    state = preprocess(env_0.reset())
     for n in range(stack_amount):
         stack.append(state)
     done = False
     max_x = 0
     while not done:
-        stack_state = stack_the_state(stack)
-        action, data = step(stack_state, network, ϵ)
+        upd += 1
+        action, data = step(env_0, stack_the_state(stack), network, ϵ)
         n_state, reward, done, info = data
-        proc_n_state = preprocess(n_state)
+        n_state = preprocess(n_state)
 
-        stack.append(proc_n_state)
+        stack.append(n_state)
+        pool.apply_async(save, ((state, action, reward, n_state, done), memory))    # Do compression in a thread.
+        #save(data)
 
-        memory.append((compression.run_length_c(state, colour), action, reward,
-                       compression.run_length_c(proc_n_state, colour), done))
-        state = proc_n_state
+        state = n_state
 
         pos = info["x_pos"]
         if pos > max_x:
             max_x = pos
-
-        env.render()
-        upd += 1
+        if render:
+            env_0.render()
 
     return max_x
 
 
 def learn(n, t):
     global upd
-    if upd > update_freq:
-        update_target(n, t)
+    if upd >= update_freq:
         upd = 0
+        update_target(n, t)
 
-    if len(memory) > 256:
-        replay(256, n, t)
+    if len(memory) > batch_size:
+        replay(batch_size, n, t)
+        global seen
+        seen += batch_size
+
+
+def reset_env(env_0):
+    env_0.close()
+    return make_random_env()
 
 
 def multiple_sim(amount, network, target):
-    global ϵ
+    global ϵ, env
+    render = False
     for i in range(0, amount):
-        #th = threading.Thread(target=learn, args=(network, target))
-        #th.start()
-        max_x = simulation(network)
+        if i > render_limit:
+            render = True
+        max_x = simulation(env, network, render)
 
         learn(network, target)
 
@@ -218,13 +235,18 @@ def multiple_sim(amount, network, target):
             network.save_weights("weights")
             target.save_weights("t_weights")
 
-        print(i, "Best x position:", max_x, "Memory use:", memory_use(), "Queue:", len(memory), "ϵ =", "{0:.3f}".format(ϵ))
+        env = reset_env(env)
+
+        #print(i, "Best x position:", max_x, "Memory use:", memory_use(), "Queue:", len(memory), "ϵ =", "{0:.3f}".format(ϵ))
+        print(i, "Best x:", max_x, "Learn Frames:", seen, "Memory:", memory_use(), "Queue:", len(memory), "ϵ =",
+              "{0:.3f}".format(ϵ))
         #th.join()
 
 
 def tests(network, episodes=5):
     stack = deque([np.zeros((y_state_r, x_state_r)) for i in range(stack_amount)], maxlen=stack_amount)
 
+    global env
     for i in range(episodes):
         state = env.reset()
         for n in range(stack_amount):
@@ -232,30 +254,38 @@ def tests(network, episodes=5):
 
         done = False
         while not done:
-            stacked_state = stack_the_state(stack)
-            action, data = step(stacked_state, network, 0)
+            action, data = step(env, stack_the_state(stack), network, 0)
             state, reward, done, info = env.step(action)
             stack.append(preprocess(state))
             env.render()
 
-        print(i, "x-position:", info["x_pos"])
+        print(i, "Final x:", info["x_pos"])
+        env = reset_env(env)
 
     return state
 
 
 if __name__ == "__main__":
+    train = False
+
     if "-v" in argv:
         visual = True
+    if "-t" in argv:
+        train = True
     if "-c" in argv:
         colour = True
         net_input_shape = (y_state_r, x_state_r, stack_amount * 3)
         stack_axis = 3
 
     Q = get_model()
-    Q_target = get_model()
-
-    update_freq = 50000
-    memory = StackQueue(memory_size, stack_amount, (y_state_r, x_state_r), colour)
+    
+    if train:
+        Q_target = get_model()
+        memory = StackQueue(memory_size, stack_amount, (y_state_r, x_state_r), colour)
+        update_freq = 75000
+        multiple_sim(100001, Q, Q_target)
+    else:
+        Q.load_weights("weights")
 
     """colour = True
     test = env.reset()
@@ -263,11 +293,25 @@ if __name__ == "__main__":
     d = compression.run_length_d(c)
     print((test == d).all())"""
 
-    multiple_sim(50, Q, Q_target)
+    """test = preprocess(env.reset())
+    n_state, reward, done, info = env.step(0)
+    test = compression.run_length_c(test, colour)
+    n = compression.run_length_c(preprocess(n_state), colour)
+
+    for i in range(memory_size):
+        memory.append((test, 0, reward, n, done))
+        if i % 10000 == 0:
+            print("Memory:", memory_use())
+
+    print("Memory:", memory_use())"""
 
     last_state = tests(Q, 10)
 
     cv2.imwrite("Result.png", last_state)
 
-    env.close()
+    print("Memory:", memory_use())
+
     cv2.destroyAllWindows()
+    Q.save_weights("weights_final")
+    Q_target.save_weights("t_weights_final")
+    env.close()

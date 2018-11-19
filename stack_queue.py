@@ -23,10 +23,17 @@ class StackQueue:
         frames = []
         for i in values:
             frame = self.queue[i]
+            done_found = False
+            q = None
             for j in range(0, self.stack_size):
-                q_stack = self.queue[i - j]
+                q_stack = self.queue[i - j] if not done_found else q
+                if q_stack[4] and j > 0:
+                    done_found = True
+                    q_stack = self.queue[i - j + 1]
+                    q = q_stack
                 self.stack.append(compression.run_length_d(q_stack[0]))
                 self.n_stack.append(compression.run_length_d(q_stack[3]))
+
             s0 = stack(self.stack, axis=axis)
             s1 = stack(self.stack, axis=axis)
             if self.colour:

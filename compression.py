@@ -6,16 +6,16 @@ def pixel_equal(p0, p1, colour):
 
 
 def line_equal(l0, l1, colour):
-    if not len(l0) == len(l1):
+    len_0 = len(l0)
+    if not len_0 == len(l1):
         return False
     else:
-        for i in range(len(l0)):
+        for i in range(len_0):
             l0_i = l0[i]
             l1_i = l1[i]
             if colour and not len(l0_i) == len(l1_i):
                 return False
-            if (isinstance(l0_i, list) and isinstance(l1_i, list) or
-                    type(l0_i) is np.ndarray and type(l1_i) is np.ndarray) and len(l0_i) > 1:
+            if (type(l0_i) is np.ndarray and type(l1_i) is np.ndarray) and len(l0_i) > 1:
                 if not (l0_i == l1_i).all():
                     return False
             else:
@@ -40,7 +40,7 @@ def run_length_c(img, colour):
                     length += 1
                 else:
                     break
-            if length > (1 if colour else 3):
+            if length > (2 if colour else 4):
                 out_x.append([length])
                 x += length
             x += 1
@@ -65,9 +65,7 @@ def run_length_c(img, colour):
 
 def run_length_d(img):
     out2 = []
-    y_l = len(img)
-    for y in range(y_l):
-        #y_l = len(img)
+    for y in range(len(img)):
         value = img[y]
         if len(value) == 1:
             length = value[0]
@@ -76,16 +74,13 @@ def run_length_d(img):
         else:
             out2.append(value)
 
-    y_l = len(out2)
     out = []
-    for y in range(y_l):
-        x_l = len(out2[y])
+    for y in range(len(out2)):
         out_x = []
-        for x in range(x_l):
+        for x in range(len(out2[y])):
             value = out2[y][x]
             if isinstance(value, list) and type(value) is not np.ndarray:
-                length = value[0]
-                for j in range(length):
+                for j in range(value[0]):
                     out_x.append(out2[y][x - 1])
             else:
                 out_x.append(value)
