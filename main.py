@@ -56,7 +56,7 @@ pool = ThreadPool(processes=3)
 ϵ = 1.0		# Randomness
 γ = 0.9875	# Future importance
 
-ϵ_min = 0.175
+ϵ_min = 0.2
 ϵ_decay = 0.9999975
 
 # 16x16 = 1 cell
@@ -76,7 +76,7 @@ resize_factor = 0.25    # 1/n² the amount of RAM used
 x_state_r = int((calc1 - sub_left) * resize_factor)
 y_state_r = int((calc2 - sub_top) * resize_factor)
 
-memory_size = 500000
+memory_size = 250000
 batch_size = 128
 stack_amount = 3
 stack_axis = 2
@@ -86,7 +86,7 @@ colour = False
 
 upd = 0
 seen = 0
-render_limit = -1
+render_limit = 5000
 
 #continue_learning = True
 
