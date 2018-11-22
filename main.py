@@ -57,7 +57,7 @@ pool = ThreadPool(processes=3)
 γ = 0.9875	# Future importance
 
 ϵ_min = 0.2
-ϵ_decay = 0.9999975
+ϵ_decay = 0.999925
 
 # 16x16 = 1 cell
 sub_bottom = 12
@@ -76,7 +76,7 @@ resize_factor = 0.25    # 1/n² the amount of RAM used
 x_state_r = int((calc1 - sub_left) * resize_factor)
 y_state_r = int((calc2 - sub_top) * resize_factor)
 
-memory_size = 250000
+memory_size = 175000
 batch_size = 128
 stack_amount = 3
 stack_axis = 2
@@ -86,7 +86,7 @@ colour = False
 
 upd = 0
 seen = 0
-render_limit = 5000
+render_limit = 2500
 
 #continue_learning = True
 
@@ -213,9 +213,9 @@ def learn(n, t):
         seen += batch_size
 
 
-def reset_env(env_0):
-    env_0.close()
-    return make_random_env()
+#def reset_env(env_0):
+#    env_0.close()
+#    return make_random_env()
 
 
 def multiple_sim(amount, network, target):
@@ -235,7 +235,9 @@ def multiple_sim(amount, network, target):
             network.save_weights("weights")
             target.save_weights("t_weights")
 
-        env = reset_env(env)
+        #env = reset_env(env)
+        env.close()
+        env = make_random_env()
 
         #print(i, "Best x position:", max_x, "Memory use:", memory_use(), "Queue:", len(memory), "ϵ =", "{0:.3f}".format(ϵ))
         print(i, "Best x:", max_x, "Learn Frames:", seen, "Memory:", memory_use(), "Queue:", len(memory), "ϵ =",
@@ -248,9 +250,9 @@ def tests(network, episodes=5):
 
     global env
     for i in range(episodes):
-        state = env.reset()
+        state = preprocess(env.reset())
         for n in range(stack_amount):
-            stack.append(preprocess(state))
+            stack.append(state)
 
         done = False
         while not done:
@@ -260,7 +262,8 @@ def tests(network, episodes=5):
             env.render()
 
         print(i, "Final x:", info["x_pos"])
-        env = reset_env(env)
+        env.close()
+        env = make_random_env()
 
     return state
 
@@ -281,6 +284,8 @@ if __name__ == "__main__":
     
     if train:
         Q_target = get_model()
+        #Q.load_weights("weights")
+        #Q_target.load_weights("t_weights")
         memory = StackQueue(memory_size, stack_amount, (y_state_r, x_state_r), colour)
         update_freq = 75000
         multiple_sim(100001, Q, Q_target)
@@ -312,6 +317,9 @@ if __name__ == "__main__":
     print("Memory:", memory_use())
 
     cv2.destroyAllWindows()
-    Q.save_weights("weights_final")
-    Q_target.save_weights("t_weights_final")
+    if train:
+        Q.save_weights("weights_final")
+        Q_target.save_weights("t_weights_final")
+
     env.close()
+
